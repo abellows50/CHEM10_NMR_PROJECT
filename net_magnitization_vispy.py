@@ -36,27 +36,33 @@ def cprint(*args, **kwargs):
         print(*args, **kwargs)
 
 ### Simultation Configuration ###
-B_device = np.array([1.,1.,5.]) # Magnetic Field Vector (points in the positive z direction)
-B_eff = B_device.copy()
-B_eff_mutex = threading.Lock()
+
 
 # pulse variables
-class pulse_info:
+class Pulse_info:
     pulse_duration = 0
     pulse_start = -1
     pulse_onging = 0
-    
-pulse = pulse_info()
+
+pulse = Pulse_info()
 pulse_mutex = threading.Lock()
+
+
+B_device = np.array([1.,1.,5.]) # Magnetic Field Vector of the device (points in the positive z direction)
+B_eff = B_device.copy()
+B_eff_mutex = threading.Lock()
 
 M = B_device/magnitude(B_device) # Net Magnitization Vector
 M0 = magnitude(M)
 
-T2 = 0.5 # Transverse Relaxation Time Constant
-T1 = 1 # Longitudinal Relaxation Time Constant
-R1 = 1/T1 # Relaxtation constant
-R2 = 1/T2 # Relaxtation constant
-gamma = 10 # Gyromagnetic ratio
+class Sample:
+    T2 = 0.5 # Transverse Relaxation Time Constant
+    T1 = 1 # Longitudinal Relaxation Time Constant
+    R1 = 1/T1 # Relaxtation constant
+    R2 = 1/T2 # Relaxtation constant
+    gamma = 10 # Gyromagnetic ratio
+sample = Sample()
+
 dt = 0.001 # change in time per step
 ORIGIN = np.array([0,0,0]) # Origin of our world
 
@@ -145,7 +151,7 @@ def update(event):
     t = event.elapsed
 
     # advance our simulation
-    M = compute_next_state(M, M0, B_eff, R1, R2, gamma)
+    M = compute_next_state(M, M0, B_eff, sample.R1, sample.R2, sample.gamma)
 
     plot_point += 1
     plot_point %= PLOT_RATE
@@ -166,9 +172,9 @@ timer = app.Timer(interval='auto', connect=update, start=True)
 
 def wait_on_pulse():
     global B_eff
-    global pulse_onging
+    global pulse
 
-    while pulse_start + pulse_duration >= t:
+    while pulse.pulse_start + pulse.pulse_duration >= t:
         pass
 
     # if the pulse is over -> shut off the rf magnetic field
@@ -179,7 +185,7 @@ def wait_on_pulse():
 
 
     with pulse_mutex: ## Begin critical section
-        pulse_onging = False
+        pulse.pulse_onging = False
     ## End critical section
 
     cprint(f"rf pulse shut off at t={t}")
@@ -189,9 +195,7 @@ def wait_on_pulse():
 def pulse_system(duration, field:np.array=np.array([])):
     global B_eff
     global t
-    global pulse_start
-    global pulse_duration
-    global pulse_onging
+    global pulse
     global B_device
     # send in a pulse
     if field.any():
@@ -209,16 +213,16 @@ def pulse_system(duration, field:np.array=np.array([])):
         
     
     with pulse_mutex: ## Begin critcal section
-        pulse_start = t
-        pulse_duration = duration
-        pulse_ongoing = True
+        pulse.pulse_start = t
+        pulse.pulse_duration = duration
+        pulse.pulse_ongoing = True
     ## End critcal section
 
 
     cprint(f"rf pulse is being deployed:\n"\
             f"     will have effective magnetic field {B_eff}\n"\
-            f"     starting at t={pulse_start}\n"\
-            f"     lasting for t={pulse_duration}")
+            f"     starting at t={pulse.pulse_start}\n"\
+            f"     lasting for t={pulse.pulse_duration}")
 
     t2 = threading.Thread(target=wait_on_pulse, daemon=True)
     t2.start()
@@ -233,17 +237,12 @@ def user_thread():
 
     global t
 
-    global pulse_start
-    global pulse_duration
-    global pulse_onging
+    global pulse
 
     global M
     global M0
 
-    global T1
-    global T2
-    global R1
-    global R2
+    global sample
 
     global name
 
@@ -297,16 +296,16 @@ def user_thread():
                 continue
 
             if args[1] == "T2":
-                T2 = float(args[2])
-                R2 = 1/T2
-                cprint(f"set T2 to {T2}, R2 to {R2}")
+                sample.T2 = float(args[2])
+                sample.R2 = 1/sample.T2
+                cprint(f"set T2 to {sample.T2}, R2 to {sample.R2}")
                 continue
 
             cprint("Err: incorrect syntax. Try config (one of: B_DEV <Bx> <By> <Bz> or M <Bx> <By> <Bz> or T1 <value> or T1 <value>)")
             continue
 
         if args[0]=="pulse":
-            if pulse_onging:
+            if pulse.pulse_onging:
                 cprint("ERR: pulse in progress\n")
                 continue
 

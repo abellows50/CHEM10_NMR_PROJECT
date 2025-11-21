@@ -8,21 +8,33 @@ import signal
 import sys
 
 import threading ## Give the user control over the simulation!
-B_field_mutex = threading.Lock()
+shutdown = threading.Event()
 
 ## Handle exits gracefully instead of throwing a system_crashed error on ^C
 def handler(sig, frame):
-    sys.exit(0)
+    shutdown.set()
+
 # register for Ctrl+C (SIGINT)
 signal.signal(signal.SIGINT, handler)
+
 
 ### Helper Functions ###
 def magnitude(vector):
     return np.sqrt(np.dot(vector,vector))
 
+
 ### Simultation Configuration ###
-B = np.array([1.,1.,5.]) # Magnetic Field Vector (points in the positive z direction)
-M = B/magnitude(B) # Net Magnitization Vector
+B_device = np.array([1.,1.,5.]) # Magnetic Field Vector (points in the positive z direction)
+B_eff = B_device.copy()
+B_eff_mutex = threading.Lock()
+
+# pulse variables
+pulse_duration = 0
+pulse_start = -1
+pulse_onging = 0
+pulse_mutex = threading.Lock()
+
+M = B_device/magnitude(B_device) # Net Magnitization Vector
 M0 = magnitude(M)
 
 T2 = 0.5 # Transverse Relaxation Time Constant
@@ -38,9 +50,11 @@ ORIGIN = np.array([0,0,0]) # Origin of our world
 ## This function appears to be highly sensitive to input for certain M,B,R,gamma values. I believe this is a sensitive dependence on
 ## initial conditions problem
 def calculate_bloch_differentials(M:np.array, M0:np.array, B:np.array, R1:float, R2:float, gamma:float) -> np.array:
-    dmxdt = gamma*np.cross(M,B)[0] - R2*M[0]
-    dmydt = gamma*np.cross(M,B)[1] - R2*M[1]
-    dmzdt = gamma*np.cross(M,B)[2] - R1*(M[2]-M0)
+    with B_eff_mutex: ## entering critical section -- B must be invariant
+        dmxdt = gamma*np.cross(M,B)[0] - R2*M[0]
+        dmydt = gamma*np.cross(M,B)[1] - R2*M[1]
+        dmzdt = gamma*np.cross(M,B)[2] - R1*(M[2]-M0)
+    ## End critical section
     
     dM = np.array([dmxdt, dmydt, dmzdt])
 
@@ -75,7 +89,7 @@ vector = scene.visuals.Arrow(
 
 # show the constant B field
 B_field = scene.visuals.Arrow(
-        pos=np.vstack([ORIGIN, (ORIGIN + B)/magnitude(ORIGIN+B)]), #Normalize the B Field Bector
+        pos=np.vstack([ORIGIN, (ORIGIN + B_eff)/magnitude(ORIGIN+B_eff)]), #Normalize the B Field Bector
         width=2,
         color='red',
         parent=view.scene
@@ -87,59 +101,106 @@ plot_point = 0
 PLOT_RATE = 2
 points = []
 
-created_second_b = False
+t = 0
 # Animation function — updates every frame
 def update(event):
     global M
-    global B
+    global B_eff
     global plot_point
     global PLOT_RATE
+    global t
+
+    if shutdown.is_set():
+        app.quit()
+
     t = event.elapsed
 
-    B_field_mutex.acquire()
     # advance our simulation
-    M = compute_next_state(M, M0, B, R1, R2, gamma)
+    M = compute_next_state(M, M0, B_eff, R1, R2, gamma)
 
-    B_field_mutex.release()
-    
     plot_point += 1
     plot_point %= PLOT_RATE
-    PLOT_RATE = int(t / 10 + 2)
+    PLOT_RATE = 2
     if plot_point == 0:
-        
         points.append((M[0],M[1],M[2])) 
         plot = np.array(points)
         scatter.set_data(plot, face_color=(0.3,1,1), size=3)
 
     vector.set_data(np.vstack([ORIGIN, ORIGIN + M]))
 
-    if t>3 and t<4:
-        B = np.array([3.,1.,3.])
-        # show the constant B field
-        global created_second_b
-        if not created_second_b:
-            B_field_new = scene.visuals.Arrow(
-                pos=np.vstack([ORIGIN, (ORIGIN + B)/magnitude(ORIGIN+B)]), #Normalize the B Field Bector
-                width=2,
-                color='red',
-                parent=view.scene
-            )
-            created_second_b = True
-
-    if t>5:
-        B = np.array([1.,1.,5.])
-
-
 timer = app.Timer(interval='auto', connect=update, start=True)
 
 
 
-def user_thread():
-    while True:
-        str = input("NMR cmd >> ")
-        if str=="pulse":
+def pulse_system(duration):
+    global B_eff
+    global t
+    global pulse_start
+    global pulse_duration
+    global pulse_onging
+    global B_device
+    # send in a pulse
+    random_vec = np.array(np.random.rand(3))
+    random_vec_norm = random_vec/magnitude(random_vec)
 
-        print(str)
+    with B_eff_mutex: ## Begin critcal section
+        B_eff = random_vec_norm * 6
+    ## End critical section
+    
+    with pulse_mutex: ## Begin critcal section
+        pulse_start = t
+        pulse_duration = duration
+        pulse_ongoing = True
+    ## End critcal section
+
+    print(f"rf pulse is being deployed:\n"\
+            f"     will have effective magnetic field {B_eff}\n"\
+            f"     starting at t={pulse_start}\n"\
+            f"     lasting for t={pulse_duration}")
+
+    while pulse_start + pulse_duration >= t:
+        pass
+
+    # if the pulse is over -> shut off the rf magnetic field
+
+    with B_eff_mutex: ## Begin critcal section
+        B_eff = B_device.copy()
+    ## End critical section
+
+
+    with pulse_mutex: ## Begin critical section
+        pulse_onging = False
+    ## End critical section
+
+    print(f"rf pulse shut off at t={t}")
+
+def user_thread():
+    global B_eff
+    global t
+    global pulse_start
+    global pulse_duration
+    global pulse_onging
+    global B_device
+
+    while True:
+        if shutdown.is_set():
+            return
+        
+        str = input("\nNMR cmd >> ")
+
+        # parse commands
+        str = str.split(" ")
+        if str[0]=="pulse":
+            pulse_system(float(str[1]))
+            continue
+
+        if str[0] == "exit":
+            shutdown.set()
+            continue
+
+        
+
+
 
 if __name__ == '__main__':
     t1 = threading.Thread(target=user_thread)

@@ -1,6 +1,7 @@
 from vispy import scene
 from vispy.visuals import transforms
 from vispy import app
+from vispy import io
 
 import numpy as np
 
@@ -9,6 +10,14 @@ import sys
 
 import threading ## Give the user control over the simulation!
 shutdown = threading.Event()
+save_next_frame = threading.Event()
+
+name = ""
+name_mutex = threading.Lock()
+
+console_mutex = threading.Lock()
+
+run_sim = threading.Event()
 
 ## Handle exits gracefully instead of throwing a system_crashed error on ^C
 def handler(sig, frame):
@@ -22,6 +31,9 @@ signal.signal(signal.SIGINT, handler)
 def magnitude(vector):
     return np.sqrt(np.dot(vector,vector))
 
+def cprint(*args, **kwargs):
+    with console_mutex:
+        print(*args, **kwargs)
 
 ### Simultation Configuration ###
 B_device = np.array([1.,1.,5.]) # Magnetic Field Vector (points in the positive z direction)
@@ -29,9 +41,12 @@ B_eff = B_device.copy()
 B_eff_mutex = threading.Lock()
 
 # pulse variables
-pulse_duration = 0
-pulse_start = -1
-pulse_onging = 0
+class pulse_info:
+    pulse_duration = 0
+    pulse_start = -1
+    pulse_onging = 0
+    
+pulse = pulse_info()
 pulse_mutex = threading.Lock()
 
 M = B_device/magnitude(B_device) # Net Magnitization Vector
@@ -109,9 +124,23 @@ def update(event):
     global plot_point
     global PLOT_RATE
     global t
+    global name
 
+    ## Check Syncronization Flags
     if shutdown.is_set():
         app.quit()
+        ## Should not get bellow this line
+        sys.exit(0)
+
+    if save_next_frame.is_set():
+        frame = canvas.render()
+        with name_mutex:
+            io.write_png(name, frame)
+        save_next_frame.clear()
+        cprint(f"Success: saved frame to {name}\n")
+    
+    if not run_sim.is_set():
+        return
 
     t = event.elapsed
 
@@ -128,35 +157,16 @@ def update(event):
 
     vector.set_data(np.vstack([ORIGIN, ORIGIN + M]))
 
+    return
+
 timer = app.Timer(interval='auto', connect=update, start=True)
 
 
 
-def pulse_system(duration):
+
+def wait_on_pulse():
     global B_eff
-    global t
-    global pulse_start
-    global pulse_duration
     global pulse_onging
-    global B_device
-    # send in a pulse
-    random_vec = np.array(np.random.rand(3))
-    random_vec_norm = random_vec/magnitude(random_vec)
-
-    with B_eff_mutex: ## Begin critcal section
-        B_eff = random_vec_norm * 6
-    ## End critical section
-    
-    with pulse_mutex: ## Begin critcal section
-        pulse_start = t
-        pulse_duration = duration
-        pulse_ongoing = True
-    ## End critcal section
-
-    print(f"rf pulse is being deployed:\n"\
-            f"     will have effective magnetic field {B_eff}\n"\
-            f"     starting at t={pulse_start}\n"\
-            f"     lasting for t={pulse_duration}")
 
     while pulse_start + pulse_duration >= t:
         pass
@@ -172,38 +182,187 @@ def pulse_system(duration):
         pulse_onging = False
     ## End critical section
 
-    print(f"rf pulse shut off at t={t}")
+    cprint(f"rf pulse shut off at t={t}")
 
-def user_thread():
+    return
+
+def pulse_system(duration, field:np.array=np.array([])):
     global B_eff
     global t
     global pulse_start
     global pulse_duration
     global pulse_onging
     global B_device
+    # send in a pulse
+    if field.any():
+         with B_eff_mutex: ## Begin critcal section
+            B_eff = field.copy()
+        ## End critical section
+    else:
+        random_vec = np.array(np.random.rand(3))
+        random_vec_norm = random_vec/magnitude(random_vec)
+
+        with B_eff_mutex: ## Begin critcal section
+            B_eff = random_vec_norm * 6
+        ## End critical section
+       
+        
+    
+    with pulse_mutex: ## Begin critcal section
+        pulse_start = t
+        pulse_duration = duration
+        pulse_ongoing = True
+    ## End critcal section
+
+
+    cprint(f"rf pulse is being deployed:\n"\
+            f"     will have effective magnetic field {B_eff}\n"\
+            f"     starting at t={pulse_start}\n"\
+            f"     lasting for t={pulse_duration}")
+
+    t2 = threading.Thread(target=wait_on_pulse, daemon=True)
+    t2.start()
+
+    return
+
+    
+
+def user_thread():
+    global B_eff
+    global B_device
+
+    global t
+
+    global pulse_start
+    global pulse_duration
+    global pulse_onging
+
+    global M
+    global M0
+
+    global T1
+    global T2
+    global R1
+    global R2
+
+    global name
 
     while True:
         if shutdown.is_set():
             return
         
-        str = input("\nNMR cmd >> ")
+        with console_mutex:
+            args = input("\nNMR cmd >> ")
 
         # parse commands
-        str = str.split(" ")
-        if str[0]=="pulse":
-            pulse_system(float(str[1]))
+        args = args.split(" ")
+
+        if args[0] == "start":
+            if run_sim.is_set():
+                cprint("ERR: simulation already running...\n")
+                continue
+            run_sim.set()
+            cprint("Starting simulation...\n")
             continue
 
-        if str[0] == "exit":
+        if args[0] == "config":
+            if run_sim.is_set():
+                cprint("ERR: simulation already running...\n")
+                continue
+
+            if len(args) == 1:
+                cprint("Err: incorrect syntax. Try config (one of: B_DEV <Bx> <By> <Bz> or M <Bx> <By> <Bz> or T1 <value> or T1 <value>)")
+                continue
+
+            if args[1] == "B_DEV":
+                m_args = np.array([float(x) for x in args[2:]])
+                B_device = m_args.copy()
+                B_eff = B_device.copy()
+                B_field.set_data(np.vstack([ORIGIN, ORIGIN + B_device]))
+                cprint(f"set B_device to {B_device}")
+                continue
+
+            if args[1] == "M":
+                m_args = np.array([float(x) for x in args[2:]])
+                M = m_args.copy()
+                M0 = magnitude(M)
+                vector.set_data(np.vstack([ORIGIN, ORIGIN + M]))
+                cprint(f"set M to {M}, M0 to {M0}")
+                continue
+
+            if args[1] == "T1":
+                T1 = float(args[2])
+                R1 = 1/T1
+                cprint(f"set T1 to {T1}, R1 to {R1}")
+                continue
+
+            if args[1] == "T2":
+                T2 = float(args[2])
+                R2 = 1/T2
+                cprint(f"set T2 to {T2}, R2 to {R2}")
+                continue
+
+            cprint("Err: incorrect syntax. Try config (one of: B_DEV <Bx> <By> <Bz> or M <Bx> <By> <Bz> or T1 <value> or T1 <value>)")
+            continue
+
+        if args[0]=="pulse":
+            if pulse_onging:
+                cprint("ERR: pulse in progress\n")
+                continue
+
+            if len(args) == 1:
+                cprint("ERR: incorrect syntax. Try pulse <duration> or pulse <diration> <Bx> <By> <Bz>")
+                continue
+
+            pulse_args = [float(x) for x in args[1:]]
+            if len(pulse_args) == 1:
+                pulse_system(pulse_args[0])
+                continue
+
+            if len(pulse_args) == 4:
+                rf_field = np.array(pulse_args[1:])
+                pulse_system(pulse_args[0], rf_field)
+                continue
+
+            cprint("ERR: incorrect syntax. Try pulse <duration> or pulse <diration> <Bx> <By> <Bz>")
+            continue
+
+        if args[0] == "exit":
             shutdown.set()
             continue
 
+        if args[0] == "capture":
+            if len(args) == 1:
+                cprint("ERR: incorrect syntax. Try capture filename")
+                continue
+
+            with name_mutex:
+                name = args[1]
+            save_next_frame.set()
+            
+
+            continue
+
+        if args[0] == "help" or args[0] == "h":
+            cprint( "----------------Help for AbelNMR System-----------------\n"\
+                    "Version: 1.0.1 (2025)\n"\
+                    "Developed by Abel Bellows for CHEM 10\n"\
+                    "Commands:\n"
+                    "     config: configure device variables (run config for more info)\n"
+                    "     start: start the simulation\n"\
+                    "     pulse: initiate an RF pulse into the system (run pulse for more info)\n"\
+                    "     capture: capture a frame of the simulation (run capture for more info)\n"\
+                    "     exit: exit the simulation\n"\
+                    "     help/h: get help\n"\
+                    "--------------------------------------------------------\n")
+            continue
         
-
-
+        cprint("the command you entered is not a valid command. for help type h\n")
+            
+    
 
 if __name__ == '__main__':
-    t1 = threading.Thread(target=user_thread)
+    t1 = threading.Thread(target=user_thread, daemon=True)
     t1.start()
     canvas.app.run()
    

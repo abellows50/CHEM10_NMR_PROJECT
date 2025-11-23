@@ -50,7 +50,7 @@ class Bloch_Simulator:
     class Pulse_info:
         pulse_duration = 0
         pulse_start = -1
-        pulse_onging = 0
+        pulse_ongoing = 0
 
     def __init__(self):
         self.sample = Sample()
@@ -79,9 +79,9 @@ class Bloch_Simulator:
     ## initial conditions problem
     def calculate_bloch_differentials(self) -> np.array:
         with self.B_eff_mutex: ## entering critical section -- B must be invariant
-            dmxdt = self.sample.gamma*np.cross(self.M,self.B_eff)[0] - self.R2*self.M[0]
-            dmydt = self.sample.gamma*np.cross(self.M,self.B)[1] - self.R2*self.M[1]
-            dmzdt = self.sample.gamma*np.cross(self.M,self.B)[2] - self.R1*(self.M[2]-self.M0)
+            dmxdt = self.sample.gamma*np.cross(self.M,self.B_eff)[0] - self.sample.R2*self.M[0]
+            dmydt = self.sample.gamma*np.cross(self.M,self.B_eff)[1] - self.sample.R2*self.M[1]
+            dmzdt = self.sample.gamma*np.cross(self.M,self.B_eff)[2] - self.sample.R1*(self.M[2]-self.M0)
         
         dM = np.array([dmxdt, dmydt, dmzdt])
 
@@ -104,7 +104,7 @@ class Bloch_Simulator:
 
 
         with self.pulse_mutex: ## Begin critical section
-            self.pulse.pulse_onging = False
+            self.pulse.pulse_ongoing = False
 
         cprint(f"rf pulse shut off at t={self.renderer.t}")
 
@@ -189,7 +189,7 @@ class Graphics_Renderer:
 
         self.t = 0
 
-        timer = app.Timer(interval='auto', connect=self.update, start=True)
+        self.timer = app.Timer(interval='auto', connect=self.update, start=True)
         simulator.set_renderer(self)
 
 
@@ -204,7 +204,7 @@ class Graphics_Renderer:
             sys.exit(0)
 
         if save_next_frame.is_set():
-            frame = self.simulator.canvas.render()
+            frame = self.canvas.render()
             with name_mutex:
                 io.write_png(name, frame)
             save_next_frame.clear()
@@ -213,8 +213,8 @@ class Graphics_Renderer:
         if not run_sim.is_set():
             return
 
-        t = event.elapsed
-        self.time_label.text = f"t = {t} s"
+        self.t = event.elapsed
+        self.time_label.text = f"t = {self.t} s"
         # advance our simulation
         self.simulator.compute_next_state()
 
@@ -276,8 +276,8 @@ class NMR_Console:
 
                 if args[1] == "M":
                     m_args = np.array([float(x) for x in args[2:]])
-                    M = m_args.copy()
-                    M0 = magnitude(M)
+                    self.simulator.M = m_args.copy()
+                    self.simulator.M0 = magnitude(self.simulator.M)
                     self.renderer.vector.set_data(np.vstack([self.renderer.ORIGIN, self.renderer.ORIGIN + self.simulator.M]))
                     cprint(f"set M to {self.simulator.M}, M0 to {self.simulator.M0}")
                     continue
@@ -301,7 +301,7 @@ class NMR_Console:
                 if not run_sim.is_set():
                     cprint("ERR: simulation is not running...\n")
                     continue
-                if self.simulator.pulse.pulse_onging:
+                if self.simulator.pulse.pulse_ongoing:
                     cprint("ERR: pulse in progress\n")
                     continue
 

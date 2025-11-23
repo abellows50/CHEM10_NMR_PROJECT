@@ -4,6 +4,7 @@ from vispy import app
 from vispy import io
 
 import time 
+import math
 
 import numpy as np
 
@@ -36,6 +37,30 @@ def magnitude(vector):
 def cprint(*args, **kwargs):
     with console_mutex:
         print(*args, **kwargs)
+
+
+class Detector_Loop:
+    def __init__(self, dir, pos, r, M):
+        self.norm = dir/magnitude(dir)
+        self.r = r
+        self.pos = pos
+        self.old_flux = self.flux(M)
+
+    
+    def flux(self,M):
+        return math.pi * self.r**2 * np.dot(M,self.norm)
+    
+    def dflux(self,M):
+        cur_flux = self.flux(M)
+        dflux = cur_flux - self.old_flux
+        self.old_flux = cur_flux
+        return dflux
+    
+    def dflux_dt(self,M,dt):
+        return self.dflux(M)/dt
+    
+
+
 
 ## This function takes the current net magnetization, starting magnetization, B field, both decay constants and the gyromagnetic ratio
 ## It returns the differential of M computed via the Bloch equations
@@ -76,6 +101,32 @@ B_eff_mutex = threading.Lock()
 M = B_device/magnitude(B_device) # Net Magnitization Vector
 M0 = magnitude(M)
 
+loop = Detector_Loop(np.array([1,1,1]), np.array([0,0,0]), 0.5, M)
+
+class Detector_Loop:
+    def __init__(self, dir, pos, r, M):
+        self.norm = dir/magnitude(dir)
+        self.r = r
+        self.pos = pos
+        self.old_flux = self.flux(M)
+
+    
+    def flux(self,M):
+        return math.pi * self.r**2 * np.dot(M,self.norm)
+    
+    def dflux(self,M):
+        cur_flux = self.flux(M)
+        dflux = cur_flux - self.old_flux
+        self.old_flux = cur_flux
+        return dflux
+    
+    def dflux_dt(self,M,dt):
+        return self.dflux(M)/dt
+    
+
+loop = Detector_Loop(np.array([1,1,1]), np.array([0,0,0]), 0.5, M0)
+
+
 class Sample:
     T2 = 0.5 # Transverse Relaxation Time Constant
     T1 = 1 # Longitudinal Relaxation Time Constant
@@ -94,7 +145,6 @@ ORIGIN = np.array([0,0,0]) # Origin of our world
 canvas = scene.SceneCanvas(keys='interactive', bgcolor='black', size=(800, 600), show=True)
 view = canvas.central_widget.add_view()
 view.camera = 'turntable'  # interactive orbit camera
-### END GPT ZONE
 
 
 # show the path that M takes through the scene
@@ -129,7 +179,7 @@ time_label = scene.visuals.Text(
 plot_point = 0
 PLOT_RATE = 2
 points = []
-
+graph_data = []
 t = 0
 # Animation function — updates every frame
 def update(event):
@@ -161,6 +211,8 @@ def update(event):
     # advance our simulation
     M = compute_next_state(M, M0, B_eff, sample.R1, sample.R2, sample.gamma)
 
+    dflux_dt = loop.dflux_dt(M, dt)
+
     plot_point += 1
     plot_point %= PLOT_RATE
     PLOT_RATE = 2
@@ -169,7 +221,11 @@ def update(event):
         plot = np.array(points)
         scatter.set_data(plot, face_color=(0.3,1,1), size=3)
 
+        
     vector.set_data(np.vstack([ORIGIN, ORIGIN + M]))
+
+    
+    print(dflux_dt)
 
     return
 
@@ -370,6 +426,8 @@ def user_thread():
         
         cprint("the command you entered is not a valid command. for help type h\n")
             
+
+    
     
 
 if __name__ == '__main__':

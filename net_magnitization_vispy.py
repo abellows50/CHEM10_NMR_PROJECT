@@ -40,7 +40,7 @@ def cprint(*args, **kwargs):
 
 
 ## this is an NMR detector coil
-# it operates off of faradays law of induction to
+# it operates based on faradays law of induction to
 # measure the magnetic field flux change as a function of time
 # the observable it measures is emf produced through flux change through the coil
 # Since the B field is constant (enough) we can approximate the integral as flux
@@ -208,7 +208,7 @@ class NMR_Output_Grapher:
         plt.show(block=False)
 
     def plot(self, new_t, new_emf):
-        self.ax.set_xlim(0, new_t)
+        self.ax.set_xlim(0, new_t+0.01)
         if abs(new_emf) > self.max - 1:
             self.max = abs(new_emf) + 1
             self.ax.set_ylim(-self.max, self.max)
@@ -224,21 +224,34 @@ class NMR_Output_Grapher:
         self.fig.canvas.draw_idle()
         plt.pause(0.001)
 
-    def fft(self, t_start, t_end):
-        points = []
-        for i in range(len(self.t)):
-            if t_start <= self.t[i] < t_end:
-                points.append(self.emf[i])
-        
-        points = np.array(points)
+    def fft(self, t_start, t_end, pad_factor=4):
+        t = np.asarray(self.t)
+        y = np.asarray(self.emf)
 
-        fft_values = np.fft.fft(points)
-        N = len(points)
-        freq = np.fft.fftfreq(N, 0.001)
-        magnitude = np.abs(fft_values)
-        self.fft_ax.clear()
-        self.fft_ax.stem(freq[(N*1)//5:(N*4)//5], magnitude[(N*1)//5:(N*4)//5])
-        return freq
+        m = (t >= t_start) & (t < t_end)
+        t = t[m]; y = y[m]
+        N = y.size
+        if N < 32: 
+            cprint("FFT: need more samples"); return None
+
+        d = float(np.mean(np.diff(t)))      # sample spacing from data
+        y = y - np.mean(y)                  # detrend
+        w = np.hanning(N)                   # window
+        yw = y * w
+
+        # zero-pad for nicer-looking curve (doesn't improve true resolution)
+        Y = np.fft.rfft(yw)
+        f = np.fft.rfftfreq(yw.size, d)
+        mag = np.abs(Y)
+
+        self.fft_ax.cla()
+        self.fft_ax.plot(f, mag)
+        self.fft_ax.set_xlim(0, f.max()/2)  # focus on positive low freqs
+        self.fft_ax.set_xlabel("Hz"); self.fft_ax.set_ylabel("|FFT|")
+        self.fft_ax.set_title(f"FFT {t_start:.2f}–{t_end:.2f}s  (Δf≈{1/((N)*d):.3g} Hz)")
+        self.fft_fig.canvas.draw_idle()
+        return f, mag
+
     
 
 
@@ -305,15 +318,6 @@ class Graphics_Renderer:
         self.detector_loop.transform = transforms.MatrixTransform()
         axises = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
 
-        # for axis in axises:
-        #     theta = math.acos(np.dot(self.simulator.detector_loop.norm, axis))
-        #     R = [
-        #         [1, 0, 0],
-
-        #     ]
-
-        #     self.detector_loop.transform.rotate(theta, axis)  # angle (deg), axis (x, y, z)
-
         self.plot_point = 0
         self.PLOT_RATE = 2
         self.points = []
@@ -337,7 +341,8 @@ class Graphics_Renderer:
             with name_mutex:
                 io.write_png(name, frame)
             self.save_next_frame.clear()
-            cprint(f"Success: saved frame to {name}\n")
+            t3 = threading.Thread(target=cprint, args=[f"Success: saved frame to {name}\n"], daemon=True)
+            t3.start()
 
         if not run_sim.is_set():
             return
@@ -377,10 +382,19 @@ class NMR_Console:
                 return
 
             with console_mutex:
-                args = input("\nNMR cmd >> ")
+                args = input("\nNMR cmd >> ").strip()
 
             # parse commands
-            args = args.split(" ")
+            args = [x.strip() for x in args.split(" ")]
+
+            if len(args) == 0:
+                continue
+
+            if args[0] == "":
+                continue
+
+            if args[0] == "\n":
+                continue
 
             if args[0] == "start":
                 if run_sim.is_set():
@@ -390,6 +404,14 @@ class NMR_Console:
                 cprint("Starting simulation...\n")
                 continue
 
+            if args[0] == "pause":
+                if not run_sim.is_set():
+                    cprint("ERR: simulation already paused...\n")
+                    continue
+                run_sim.clear()
+                cprint("paused simulation...\n")
+                continue
+
             if args[0] == "config":
                 if run_sim.is_set():
                     cprint("ERR: simulation already running...\n")
@@ -397,12 +419,20 @@ class NMR_Console:
 
                 if len(args) == 1:
                     cprint(
-                        "Err: incorrect syntax. Try config (one of: B_DEV <Bx> <By> <Bz> or M <Bx> <By> <Bz> or T1 <value> or T1 <value>)"
+                        "Err: incorrect syntax. Try \n" \
+                        "   config B_DEV <Bx> <By> <Bz>\n" \
+                        "   config M <Bx> <By> <Bz>\n" \
+                        "   config T1 <value>\n" \
+                        "   config T2 <value>)"
                     )
                     continue
 
                 if args[1] == "B_DEV":
-                    m_args = np.array([float(x) for x in args[2:]])
+                    try:
+                        m_args = np.array([float(x) for x in args[2:]])
+                    except:
+                        cprint(f"Error: args ({args[2:]} are not valif floats")
+                        continue
                     self.simulator.B_device = m_args.copy()
                     self.simulator.B_eff = self.simulator.B_device.copy()
                     self.renderer.B_field.set_data(
@@ -418,7 +448,12 @@ class NMR_Console:
                     continue
 
                 if args[1] == "M":
-                    m_args = np.array([float(x) for x in args[2:]])
+                    try:
+                        m_args = np.array([float(x) for x in args[2:]])
+                    except:
+                        cprint(f"Error: args ({args[2:]} are not valif floats")
+                        continue
+
                     self.simulator.M = m_args.copy()
                     self.simulator.M0 = magnitude(self.simulator.M)
                     self.renderer.vector.set_data(
@@ -434,7 +469,11 @@ class NMR_Console:
                     continue
 
                 if args[1] == "T1":
-                    self.simulator.sample.T1 = float(args[2])
+                    try:
+                        self.simulator.sample.T1 = float(args[2])
+                    except:
+                        cprint(f"Error: args are not valif floats")
+                        continue
                     self.simulator.sample.R1 = 1 / self.simulator.sample.T1
                     cprint(
                         f"set T1 to {self.simulator.sample.T1}, R1 to {self.simulator.sample.R1}"
@@ -442,7 +481,13 @@ class NMR_Console:
                     continue
 
                 if args[1] == "T2":
-                    self.simulator.sample.T2 = float(args[2])
+
+                    try:
+                        self.simulator.sample.T2 = float(args[2])
+                    except:
+                        cprint(f"Error: args are not valif floats")
+                        continue
+
                     self.simulator.sample.R2 = 1 / self.simulator.sample.T2
                     cprint(
                         f"set T2 to {self.simulator.sample.T2}, R2 to {self.simulator.sample.R2}"
@@ -450,7 +495,11 @@ class NMR_Console:
                     continue
 
                 cprint(
-                    "Err: incorrect syntax. Try config (one of: B_DEV <Bx> <By> <Bz> or M <Bx> <By> <Bz> or T1 <value> or T1 <value>)"
+                    "Err: incorrect syntax. Try \n" \
+                    "   config B_DEV <Bx> <By> <Bz>\n" \
+                    "   config M <Bx> <By> <Bz>\n" \
+                    "   config T1 <value>\n" \
+                    "   config T2 <value>)"
                 )
                 continue
 
@@ -464,11 +513,19 @@ class NMR_Console:
 
                 if len(args) == 1:
                     cprint(
-                        "ERR: incorrect syntax. Try pulse <duration> or pulse <diration> <Bx> <By> <Bz>"
+                        "ERR: incorrect syntax.\n " \
+                        "   Correct usage: \n" \
+                        "       pulse <duration>\n" \
+                        "       pulse <diration> <Bx> <By> <Bz>"
                     )
                     continue
 
-                pulse_args = [float(x) for x in args[1:]]
+                try:
+                    pulse_args = [float(x) for x in args[1:]]
+                except:
+                    cprint(f"Error: args ({args[1:]}) are not valid floats")
+                    continue
+
                 if len(pulse_args) == 1:
                     self.simulator.pulse_system(pulse_args[0])
                     continue
@@ -479,22 +536,32 @@ class NMR_Console:
                     continue
 
                 cprint(
-                    "ERR: incorrect syntax. Try pulse <duration> or pulse <diration> <Bx> <By> <Bz>"
-                )
+                        "ERR: incorrect syntax.\n " \
+                        "   Correct usage: \n" \
+                        "       pulse <duration>\n" \
+                        "       pulse <diration> <Bx> <By> <Bz>"
+                    )
                 continue
 
             if args[0] == "exit":
                 shutdown.set()
                 continue
+            
 
 
             if args[0] == "fft":
                 if len(args) == 1:
-                    cprint("ERR: incorrect syntax. Try capture filename")
+                    cprint("ERR: incorrect syntax.\n" \
+                    "   Correct usage:\n" \
+                    "       capture filename")
                     continue
 
-                t_start = float(args[1])
-                t_end = float(args[2])
+                try:
+                    t_start = float(args[1])
+                    t_end = float(args[2])
+                except:
+                    cprint("Error: args are not valif floats")
+                    continue
 
                 self.renderer.grapher.fft(t_start, t_end)
 
@@ -502,7 +569,11 @@ class NMR_Console:
 
             if args[0] == "capture":
                 if len(args) == 1:
-                    cprint("ERR: incorrect syntax. Try capture filename")
+                    cprint( 
+                        "ERR: incorrect syntax.\n" \
+                        "   Correct usage:\n" \
+                        "       capture filename"
+                    )
                     continue
 
                 with name_mutex:

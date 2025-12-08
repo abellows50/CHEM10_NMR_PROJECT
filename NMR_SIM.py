@@ -389,10 +389,8 @@ class NMR_Console:
 
             if len(args) == 0:
                 continue
-
             if args[0] == "":
                 continue
-
             if args[0] == "\n":
                 continue
 
@@ -411,6 +409,11 @@ class NMR_Console:
                 run_sim.clear()
                 cprint("paused simulation...\n")
                 continue
+
+            if args[0] == "exit":
+                shutdown.set()
+                continue
+
 
             if args[0] == "config":
                 if run_sim.is_set():
@@ -542,12 +545,6 @@ class NMR_Console:
                         "       pulse <diration> <Bx> <By> <Bz>"
                     )
                 continue
-
-            if args[0] == "exit":
-                shutdown.set()
-                continue
-            
-
 
             if args[0] == "fft":
                 if len(args) == 1:

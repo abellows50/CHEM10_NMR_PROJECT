@@ -611,7 +611,7 @@ if __name__ == "__main__":
 
     console = NMR_Console(simulator, renderer)
 
-    if sys.argv.__len__() >= 1:
+    if sys.argv.__len__() > 1:
         if sys.argv[1] == "--start":
             run_sim.set()
 

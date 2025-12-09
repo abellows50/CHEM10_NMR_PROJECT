@@ -1,7 +1,7 @@
 # NMR Machine Simulator
 
 ## Purpose
-To demonstrate the macroscopic behavior of M in an NMR machine and to make clear the workflow of NMR analysis, I constructed a simulator of Bloch Equations. The user can configure all aspects of the device including B_DEV, M, T1, T2, and can send RF pulses with a specific applied magnetic field.
+To demonstrate the macroscopic behavior of M in an NMR machine and to make clear the workflow of NMR analysis, I constructed a simulator of Bloch Equations. The user can configure all aspects of the device including B_DEV, M, T1, T2, and can send RF pulses with a specific applied magnetic field. The NMR simulator relies on the Vispy open source graphics library.
 
 ## Usage
 ### Python Enviroment Configuration

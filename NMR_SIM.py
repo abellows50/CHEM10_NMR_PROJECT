@@ -160,7 +160,7 @@ class Bloch_Simulator:
                 self.B_eff = field.copy()
 
         else:
-            random_vec = np.array(np.random.rand(3))
+            random_vec = np.array(np.random.rand(3)) * [(-1) ** np.random.randint(2) for _ in range(3)]
             random_vec_norm = random_vec / magnitude(random_vec)
 
             with self.B_eff_mutex:  ## Begin critcal section
@@ -246,9 +246,10 @@ class NMR_Output_Grapher:
 
         self.fft_ax.cla()
         self.fft_ax.plot(f, mag)
+        max_mag_f = f[np.argmax(mag)]
         self.fft_ax.set_xlim(0, f.max()/2)  # focus on positive low freqs
         self.fft_ax.set_xlabel("Hz"); self.fft_ax.set_ylabel("|FFT|")
-        self.fft_ax.set_title(f"FFT {t_start:.2f}–{t_end:.2f}s  (Δf≈{1/((N)*d):.3g} Hz)")
+        self.fft_ax.set_title(f"FFT {t_start:.2f}–{t_end:.2f}s  (larmour f≈{max_mag_f:.3g} Hz)")
         self.fft_fig.canvas.draw_idle()
         return f, mag
 
@@ -604,9 +605,14 @@ class NMR_Console:
 
 
 if __name__ == "__main__":
+
     simulator = Bloch_Simulator()
     renderer = Graphics_Renderer(simulator)
 
     console = NMR_Console(simulator, renderer)
+
+    if sys.argv.__len__() >= 1:
+        if sys.argv[1] == "--start":
+            run_sim.set()
 
     console.start()

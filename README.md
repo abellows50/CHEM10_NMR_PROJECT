@@ -30,3 +30,6 @@ You can capture a photo of the current frame by running `capture <filename>.png`
 
 ### Fourier Transform to see the final NMR spectrum
 Viewing the FID graph run `fft <t1> <t2>` to initiate an fourier transform with the data between t=t1 and t=t2.
+
+## Model Noise
+To model a noisy enviroment run `sh noisy.sh <pulse_timing>` to snd in short radio bursts every `<pulse_timing>` seconds.
